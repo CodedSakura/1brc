@@ -1,36 +1,56 @@
-import * as readline from 'node:readline';
+import { Transform } from "node:stream";
 import * as fs from 'node:fs';
 
 const fileName = process.argv[2];
 const stream = fs.createReadStream(fileName);
-const lineStream = readline.createInterface(stream);
 
 const aggregations = new Map();
 
-for await (const line of lineStream) {
-  const [stationName, temperatureStr] = line.split(';');
+const transform = new Transform({
+  transform(chunk, enc, callback) {
+    if (enc == "buffer") {
+      chunk = chunk.toString();
+    }
 
-  // use integers for computation to avoid loosing precision
-  const temperature = Math.floor(parseFloat(temperatureStr) * 10);
+    const data = ((this.last ?? "") + chunk)
+        .split(/(?<=\n)/);
 
-  const existing = aggregations.get(stationName);
+    if (!data[data.length - 1].endsWith("\n")) {
+      this.last = data.pop();
+    } else {
+      this.last = "";
+    }
 
-  if (existing) {
-    existing.min = Math.min(existing.min, temperature);
-    existing.max = Math.max(existing.max, temperature);
-    existing.sum += temperature;
-    existing.count++;
-  } else {
-    aggregations.set(stationName, {
-      min: temperature,
-      max: temperature,
-      sum: temperature,
-      count: 1,
-    });
+    data.map(row => row.split(";"))
+        .map(([stationName, temperatureStr]) => {
+          const temperature = Math.floor(parseFloat(temperatureStr) * 10);
+
+          const existing = aggregations.get(stationName);
+
+          if (existing) {
+            existing.min = Math.min(existing.min, temperature);
+            existing.max = Math.max(existing.max, temperature);
+            existing.sum += temperature;
+            existing.count++;
+          } else {
+            aggregations.set(stationName, {
+              min: temperature,
+              max: temperature,
+              sum: temperature,
+              count: 1,
+            });
+          }
+        });
+
+    callback(null, "");
   }
-}
+});
 
-printCompiledResults(aggregations);
+transform.on("finish", () => {
+  printCompiledResults(aggregations);
+});
+
+stream.pipe(transform);
 
 /**
  * @param {Map} aggregations
